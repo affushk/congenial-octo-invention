@@ -78,8 +78,12 @@ class MainActivity : ComponentActivity() {
     private var balance by mutableFloatStateOf(0f)
     private var noiseReduction by mutableStateOf(true)
     private var voiceFocus by mutableStateOf(true)
+    private var smartVoice by mutableStateOf(true)
+    private var compressor by mutableStateOf(true)
+    private var feedbackGuard by mutableStateOf(true)
+    private var adaptiveNoise by mutableStateOf(true)
     private var selectedPreset by mutableStateOf("Conversation")
-    private val eq = List(5) { mutableFloatStateOf(0f) }
+    private val eq = List(10) { mutableFloatStateOf(0f) }
     private var message by mutableStateOf("Connect headphones, then tap Start.")
 
     private val permissionLauncher =
@@ -121,16 +125,20 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
 
-        SoundAmplifierService.listener = { active, meter, text ->
+        SoundAmplifierService.listener = { active, meter, text, serviceGain ->
             runOnUiThread {
                 running = active
                 level = meter
                 message = text
+                gain = serviceGain
             }
         }
 
         running = SoundAmplifierService.isAmplifying
         level = SoundAmplifierService.currentLevel
+        if (running) {
+            gain = SoundAmplifierService.currentGain
+        }
         message = if (running) {
             SoundAmplifierService.lastMessage
         } else {
@@ -179,6 +187,10 @@ class MainActivity : ComponentActivity() {
             putExtra(SoundAmplifierService.EXTRA_BALANCE, balance)
             putExtra(SoundAmplifierService.EXTRA_NOISE_REDUCTION, noiseReduction)
             putExtra(SoundAmplifierService.EXTRA_VOICE_FOCUS, voiceFocus)
+            putExtra(SoundAmplifierService.EXTRA_SMART_VOICE, smartVoice)
+            putExtra(SoundAmplifierService.EXTRA_COMPRESSOR, compressor)
+            putExtra(SoundAmplifierService.EXTRA_FEEDBACK_GUARD, feedbackGuard)
+            putExtra(SoundAmplifierService.EXTRA_ADAPTIVE_NOISE, adaptiveNoise)
             putExtra(
                 SoundAmplifierService.EXTRA_EQ,
                 FloatArray(eq.size) { index -> eq[index].floatValue }
@@ -226,7 +238,14 @@ class MainActivity : ComponentActivity() {
                 outputBoost = 1200f
                 noiseReduction = true
                 voiceFocus = true
-                setEq(floatArrayOf(-0.10f, 0.06f, 0.20f, 0.30f, 0.18f))
+                smartVoice = true
+                compressor = true
+                feedbackGuard = true
+                adaptiveNoise = true
+                setEq(floatArrayOf(
+                    -0.25f, -0.12f, 0.00f, 0.10f, 0.22f,
+                    0.30f, 0.28f, 0.18f, 0.08f, 0.00f
+                ))
             }
             "TV" -> {
                 gain = 2.6f
@@ -234,7 +253,14 @@ class MainActivity : ComponentActivity() {
                 outputBoost = 1400f
                 noiseReduction = true
                 voiceFocus = false
-                setEq(floatArrayOf(0.04f, 0.10f, 0.18f, 0.22f, 0.12f))
+                smartVoice = true
+                compressor = true
+                feedbackGuard = true
+                adaptiveNoise = false
+                setEq(floatArrayOf(
+                    0.04f, 0.08f, 0.10f, 0.14f, 0.18f,
+                    0.20f, 0.16f, 0.10f, 0.04f, 0.00f
+                ))
             }
             "Outdoor" -> {
                 gain = 2.0f
@@ -242,7 +268,14 @@ class MainActivity : ComponentActivity() {
                 outputBoost = 1000f
                 noiseReduction = true
                 voiceFocus = true
-                setEq(floatArrayOf(-0.20f, -0.06f, 0.14f, 0.24f, 0.12f))
+                smartVoice = true
+                compressor = true
+                feedbackGuard = true
+                adaptiveNoise = true
+                setEq(floatArrayOf(
+                    -0.35f, -0.25f, -0.10f, 0.05f, 0.18f,
+                    0.28f, 0.25f, 0.10f, 0.00f, -0.05f
+                ))
             }
             "Quiet Room" -> {
                 gain = 1.8f
@@ -250,7 +283,14 @@ class MainActivity : ComponentActivity() {
                 outputBoost = 800f
                 noiseReduction = false
                 voiceFocus = false
-                setEq(floatArrayOf(0f, 0f, 0.06f, 0.10f, 0f))
+                smartVoice = true
+                compressor = true
+                feedbackGuard = true
+                adaptiveNoise = false
+                setEq(floatArrayOf(
+                    0.00f, 0.00f, 0.02f, 0.06f, 0.10f,
+                    0.10f, 0.05f, 0.00f, 0.00f, 0.00f
+                ))
             }
         }
 
@@ -270,6 +310,10 @@ class MainActivity : ComponentActivity() {
         balance = 0f
         noiseReduction = true
         voiceFocus = true
+        smartVoice = true
+        compressor = true
+        feedbackGuard = true
+        adaptiveNoise = true
         selectedPreset = "Safe"
 
         eq.forEach { state ->
@@ -282,6 +326,58 @@ class MainActivity : ComponentActivity() {
         } else {
             "Safe defaults restored."
         }
+    }
+
+    private fun saveCustomPreset() {
+        val editor = getSharedPreferences("altaf_custom_preset", MODE_PRIVATE).edit()
+
+        editor.putBoolean("saved", true)
+        editor.putFloat("gain", gain)
+        editor.putFloat("micSensitivity", micSensitivity)
+        editor.putFloat("outputBoost", outputBoost)
+        editor.putFloat("balance", balance)
+        editor.putBoolean("noiseReduction", noiseReduction)
+        editor.putBoolean("voiceFocus", voiceFocus)
+        editor.putBoolean("smartVoice", smartVoice)
+        editor.putBoolean("compressor", compressor)
+        editor.putBoolean("feedbackGuard", feedbackGuard)
+        editor.putBoolean("adaptiveNoise", adaptiveNoise)
+
+        eq.forEachIndexed { index, state ->
+            editor.putFloat("eq_$index", state.floatValue)
+        }
+
+        editor.apply()
+        selectedPreset = "My Preset"
+        message = "My Preset saved."
+    }
+
+    private fun loadCustomPreset() {
+        val prefs = getSharedPreferences("altaf_custom_preset", MODE_PRIVATE)
+
+        if (!prefs.getBoolean("saved", false)) {
+            message = "No custom preset saved yet."
+            return
+        }
+
+        gain = prefs.getFloat("gain", 2.2f)
+        micSensitivity = prefs.getFloat("micSensitivity", 1.5f)
+        outputBoost = prefs.getFloat("outputBoost", 1200f)
+        balance = prefs.getFloat("balance", 0f)
+        noiseReduction = prefs.getBoolean("noiseReduction", true)
+        voiceFocus = prefs.getBoolean("voiceFocus", true)
+        smartVoice = prefs.getBoolean("smartVoice", true)
+        compressor = prefs.getBoolean("compressor", true)
+        feedbackGuard = prefs.getBoolean("feedbackGuard", true)
+        adaptiveNoise = prefs.getBoolean("adaptiveNoise", true)
+
+        eq.forEachIndexed { index, state ->
+            state.floatValue = prefs.getFloat("eq_$index", 0f)
+        }
+
+        selectedPreset = "My Preset"
+        pushSettings()
+        message = "My Preset loaded."
     }
 
     @Composable
@@ -560,10 +656,10 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
-                SectionCard(title = "Smart processing") {
+                SectionCard(title = "Advanced processing") {
                     ToggleRow(
                         title = "Noise Reduction",
-                        subtitle = "Reduce steady background noise when supported by the phone.",
+                        subtitle = "Use the phone's hardware noise suppressor when available.",
                         checked = noiseReduction,
                         onCheckedChange = {
                             noiseReduction = it
@@ -573,10 +669,50 @@ class MainActivity : ComponentActivity() {
 
                     ToggleRow(
                         title = "Voice Focus",
-                        subtitle = "Prioritize speech clarity using the device's voice processing.",
+                        subtitle = "Use automatic gain control to keep speech easier to hear.",
                         checked = voiceFocus,
                         onCheckedChange = {
                             voiceFocus = it
+                            pushSettings()
+                        }
+                    )
+
+                    ToggleRow(
+                        title = "Smart Voice Enhance",
+                        subtitle = "Reduce low rumble and emphasize speech detail and consonants.",
+                        checked = smartVoice,
+                        onCheckedChange = {
+                            smartVoice = it
+                            pushSettings()
+                        }
+                    )
+
+                    ToggleRow(
+                        title = "Compressor + Limiter",
+                        subtitle = "Lift quiet speech while softening sudden loud peaks.",
+                        checked = compressor,
+                        onCheckedChange = {
+                            compressor = it
+                            pushSettings()
+                        }
+                    )
+
+                    ToggleRow(
+                        title = "Feedback Guard",
+                        subtitle = "Automatically reduce gain during sustained dangerously loud input.",
+                        checked = feedbackGuard,
+                        onCheckedChange = {
+                            feedbackGuard = it
+                            pushSettings()
+                        }
+                    )
+
+                    ToggleRow(
+                        title = "Adaptive Noise",
+                        subtitle = "Dynamically attenuate very low-level background sound between speech.",
+                        checked = adaptiveNoise,
+                        onCheckedChange = {
+                            adaptiveNoise = it
                             pushSettings()
                         }
                     )
@@ -610,10 +746,41 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { saveCustomPreset() },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF202020),
+                                contentColor = Color.White
+                            )
+                        ) {
+                            Text("Save My Preset")
+                        }
+
+                        Button(
+                            onClick = { loadCustomPreset() },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF202020),
+                                contentColor = Color.White
+                            )
+                        ) {
+                            Text("Load")
+                        }
+                    }
                 }
 
-                SectionCard(title = "5-band Equalizer") {
-                    val labels = listOf("100 Hz", "400 Hz", "1 kHz", "4 kHz", "10 kHz")
+                SectionCard(title = "10-band Equalizer") {
+                    val labels = listOf(
+                        "60 Hz", "120 Hz", "250 Hz", "500 Hz", "1 kHz",
+                        "2 kHz", "4 kHz", "6 kHz", "8 kHz", "12 kHz"
+                    )
+
                     labels.forEachIndexed { index, label ->
                         SettingSlider(
                             label = label,
