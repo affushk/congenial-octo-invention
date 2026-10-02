@@ -17,6 +17,8 @@ import androidx.core.content.ContextCompat
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.sign
+import kotlin.math.sqrt
 import kotlin.math.tanh
 
 class AudioEngine(private val context: Context) {
@@ -35,10 +37,21 @@ class AudioEngine(private val context: Context) {
     @Volatile var micSensitivity: Float = 1.5f
     @Volatile var outputBoostMb: Int = 1200
     @Volatile var balance: Float = 0f
+
     @Volatile var noiseReductionEnabled: Boolean = true
     @Volatile var voiceFocusEnabled: Boolean = true
+    @Volatile var smartVoiceEnabled: Boolean = true
+    @Volatile var compressorEnabled: Boolean = true
+    @Volatile var feedbackGuardEnabled: Boolean = true
+    @Volatile var adaptiveNoiseEnabled: Boolean = true
 
-    private val eqValues = FloatArray(5) { 0f }
+    private val eqValues = FloatArray(10) { 0f }
+
+    private var previousInput = 0f
+    private var previousHighPass = 0f
+    private var noiseFloorRms = 600f
+    private var feedbackReduction = 1f
+    private var hotBufferCount = 0
 
     var levelListener: ((Float) -> Unit)? = null
     var errorListener: ((String) -> Unit)? = null
@@ -57,6 +70,11 @@ class AudioEngine(private val context: Context) {
         }
 
         cleanup()
+
+        previousInput = 0f
+        previousHighPass = 0f
+        feedbackReduction = 1f
+        hotBufferCount = 0
 
         val sampleRate = 48_000
         val inputChannel = AudioFormat.CHANNEL_IN_MONO
@@ -182,8 +200,21 @@ class AudioEngine(private val context: Context) {
         applyOutputBoost()
     }
 
+    fun updateAdvancedProcessing(
+        smartVoice: Boolean,
+        compressor: Boolean,
+        feedbackGuard: Boolean,
+        adaptiveNoise: Boolean
+    ) {
+        smartVoiceEnabled = smartVoice
+        compressorEnabled = compressor
+        feedbackGuardEnabled = feedbackGuard
+        adaptiveNoiseEnabled = adaptiveNoise
+        applyEffectSettings()
+    }
+
     fun setEqBand(index: Int, normalized: Float) {
-        if (index !in 0..4) return
+        if (index !in 0..9) return
         eqValues[index] = normalized.coerceIn(-1f, 1f)
         applyEqBand(index)
     }
@@ -205,29 +236,91 @@ class AudioEngine(private val context: Context) {
                 break
             }
 
+            var sumSquares = 0.0
+            var rawPeak = 0
+            for (i in 0 until read) {
+                val raw = input[i].toInt()
+                rawPeak = max(rawPeak, abs(raw))
+                sumSquares += raw.toDouble() * raw.toDouble()
+            }
+
+            val rms = sqrt(sumSquares / read.coerceAtLeast(1)).toFloat()
+
+            val adaptiveGate = if (adaptiveNoiseEnabled) {
+                if (rms < noiseFloorRms * 2.2f) {
+                    noiseFloorRms = (noiseFloorRms * 0.992f) + (rms * 0.008f)
+                }
+
+                when {
+                    rms < max(180f, noiseFloorRms * 1.15f) -> 0.48f
+                    rms < max(350f, noiseFloorRms * 1.45f) -> 0.72f
+                    else -> 1f
+                }
+            } else {
+                1f
+            }
+
             val localGain = gain.coerceIn(1f, 8f)
             val localMicSensitivity = micSensitivity.coerceIn(1f, 3f)
             val localBalance = balance.coerceIn(-1f, 1f)
             val leftGain = if (localBalance > 0f) 1f - localBalance else 1f
             val rightGain = if (localBalance < 0f) 1f + localBalance else 1f
 
-            var peak = 0
+            val protectedGain = if (feedbackGuardEnabled) feedbackReduction else 1f
+            val totalGain = localGain * localMicSensitivity * adaptiveGate * protectedGain
+
+            var outputPeak = 0
 
             for (i in 0 until read) {
-                val raw = input[i].toInt()
-                peak = max(peak, abs(raw))
+                val raw = input[i].toFloat()
 
-                val boosted = raw.toFloat() * localGain * localMicSensitivity
-                val amplified = softClip(boosted)
+                var processed = if (smartVoiceEnabled) {
+                    val highPass = raw - previousInput + (0.94f * previousHighPass)
+                    previousInput = raw
+                    previousHighPass = highPass
 
-                val left = (amplified * leftGain).toInt()
+                    // Speech-presence emphasis: reduce low rumble while adding clarity.
+                    (raw * 0.78f) + (highPass * 0.55f)
+                } else {
+                    previousInput = raw
+                    raw
+                }
+
+                processed *= totalGain
+
+                if (compressorEnabled) {
+                    processed = compress(processed)
+                }
+
+                processed = softClip(processed)
+
+                val left = (processed * leftGain).toInt()
                     .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-                val right = (amplified * rightGain).toInt()
+                val right = (processed * rightGain).toInt()
                     .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+
+                outputPeak = max(outputPeak, max(abs(left), abs(right)))
 
                 val out = i * 2
                 stereo[out] = left.toShort()
                 stereo[out + 1] = right.toShort()
+            }
+
+            if (feedbackGuardEnabled) {
+                val hot = outputPeak > 30_500 && rawPeak > 13_000
+                if (hot) {
+                    hotBufferCount++
+                    if (hotBufferCount >= 3) {
+                        feedbackReduction = max(0.42f, feedbackReduction * 0.80f)
+                        hotBufferCount = 0
+                    }
+                } else {
+                    hotBufferCount = max(0, hotBufferCount - 1)
+                    feedbackReduction = (feedbackReduction + 0.012f).coerceAtMost(1f)
+                }
+            } else {
+                feedbackReduction = 1f
+                hotBufferCount = 0
             }
 
             try {
@@ -240,13 +333,22 @@ class AudioEngine(private val context: Context) {
             meterCounter++
             if (meterCounter >= 3) {
                 meterCounter = 0
-                val normalized = (peak * localGain * localMicSensitivity / 32767f)
-                    .coerceIn(0f, 1f)
-                levelListener?.invoke(normalized)
+                levelListener?.invoke((outputPeak / 32767f).coerceIn(0f, 1f))
             }
         }
 
         running.set(false)
+    }
+
+    private fun compress(value: Float): Float {
+        val normalized = value / 32768f
+        val magnitude = abs(normalized)
+        val threshold = 0.56f
+
+        if (magnitude <= threshold) return value
+
+        val compressedMagnitude = threshold + ((magnitude - threshold) / 4.2f)
+        return sign(normalized) * compressedMagnitude * 32768f
     }
 
     private fun softClip(value: Float): Float {
@@ -291,7 +393,7 @@ class AudioEngine(private val context: Context) {
 
     private fun applyEffectSettings() {
         try {
-            noiseSuppressor?.enabled = noiseReductionEnabled
+            noiseSuppressor?.enabled = noiseReductionEnabled || adaptiveNoiseEnabled
         } catch (_: Throwable) {
         }
 
@@ -310,11 +412,12 @@ class AudioEngine(private val context: Context) {
     }
 
     private fun applyAllEq() {
-        for (i in 0..4) applyEqBand(i)
+        for (i in 0..9) applyEqBand(i)
     }
 
     private fun applyEqBand(uiBand: Int) {
         val eq = equalizer ?: return
+
         try {
             val bandCount = eq.numberOfBands.toInt()
             if (bandCount <= 0) return
@@ -322,13 +425,14 @@ class AudioEngine(private val context: Context) {
             val actualBand = if (bandCount == 1) {
                 0
             } else {
-                ((uiBand * (bandCount - 1)) / 4).coerceIn(0, bandCount - 1)
+                ((uiBand * (bandCount - 1)) / 9).coerceIn(0, bandCount - 1)
             }
 
             val range = eq.bandLevelRange
             val minLevel = range[0].toInt()
             val maxLevel = range[1].toInt()
             val normalized = eqValues[uiBand].coerceIn(-1f, 1f)
+
             val level = if (normalized >= 0f) {
                 (normalized * maxLevel).toInt()
             } else {
