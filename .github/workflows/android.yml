@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: altaf-sound-amplifier-build
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -61,5 +65,6 @@ jobs:
             echo "APK unchanged"
           else
             git commit -m "Update direct APK download [skip ci]"
+            git pull --rebase origin main
             git push origin HEAD:main
           fi
