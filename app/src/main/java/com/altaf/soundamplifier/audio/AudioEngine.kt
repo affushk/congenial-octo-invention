@@ -173,11 +173,11 @@ class AudioEngine(private val context: Context) {
         applyEffectSettings()
     }
 
-    fun setMicSensitivity(value: Float) {
+    fun updateMicSensitivity(value: Float) {
         micSensitivity = value.coerceIn(1f, 3f)
     }
 
-    fun setOutputBoostMb(value: Int) {
+    fun updateOutputBoostMb(value: Int) {
         outputBoostMb = value.coerceIn(0, 1800)
         applyOutputBoost()
     }
