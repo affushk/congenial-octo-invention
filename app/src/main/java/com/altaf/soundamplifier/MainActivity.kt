@@ -14,6 +14,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -42,6 +43,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -232,7 +234,7 @@ class MainActivity : ComponentActivity() {
             if (running) Color(0xFFFF6B6B) else Color(0xFF9BE564),
             label = "startColor"
         )
-        var route by mutableStateOf(currentAudioRoute())
+        var route by remember { mutableStateOf(currentAudioRoute()) }
 
         LaunchedEffect(Unit) {
             while (true) {
@@ -476,7 +478,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun SectionCard(
         title: String,
-        content: @Composable Column.() -> Unit
+        content: @Composable ColumnScope.() -> Unit
     ) {
         Card(
             modifier = Modifier.fillMaxWidth(),
