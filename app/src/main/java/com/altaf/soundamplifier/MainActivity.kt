@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -58,6 +59,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -109,7 +111,7 @@ class MainActivity : ComponentActivity() {
                 var showSplash by remember { mutableStateOf(true) }
 
                 LaunchedEffect(Unit) {
-                    delay(2200)
+                    delay(3600)
                     showSplash = false
                 }
 
@@ -382,21 +384,53 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun AltafSplash() {
-        var started by remember { mutableStateOf(false) }
+        var stage by remember { mutableStateOf(0) }
 
-        val alpha by animateFloatAsState(
-            targetValue = if (started) 1f else 0f,
-            animationSpec = tween(850, easing = FastOutSlowInEasing),
-            label = "splashAlpha"
+        val logoScale by animateFloatAsState(
+            targetValue = if (stage >= 1) 1f else 0.55f,
+            animationSpec = tween(700, easing = FastOutSlowInEasing),
+            label = "logoScale"
         )
-        val scale by animateFloatAsState(
-            targetValue = if (started) 1f else 0.78f,
-            animationSpec = tween(950, easing = FastOutSlowInEasing),
-            label = "splashScale"
+        val logoAlpha by animateFloatAsState(
+            targetValue = if (stage >= 1) 1f else 0f,
+            animationSpec = tween(500),
+            label = "logoAlpha"
+        )
+        val altafScale by animateFloatAsState(
+            targetValue = if (stage >= 2) 1f else 1.55f,
+            animationSpec = tween(650, easing = FastOutSlowInEasing),
+            label = "altafScale"
+        )
+        val altafAlpha by animateFloatAsState(
+            targetValue = if (stage >= 2) 1f else 0f,
+            animationSpec = tween(450),
+            label = "altafAlpha"
+        )
+        val designerScale by animateFloatAsState(
+            targetValue = if (stage >= 3) 1f else 1.55f,
+            animationSpec = tween(650, easing = FastOutSlowInEasing),
+            label = "designerScale"
+        )
+        val designerAlpha by animateFloatAsState(
+            targetValue = if (stage >= 3) 1f else 0f,
+            animationSpec = tween(450),
+            label = "designerAlpha"
+        )
+        val subtitleAlpha by animateFloatAsState(
+            targetValue = if (stage >= 4) 1f else 0f,
+            animationSpec = tween(500),
+            label = "subtitleAlpha"
         )
 
         LaunchedEffect(Unit) {
-            started = true
+            delay(120)
+            stage = 1
+            delay(650)
+            stage = 2
+            delay(650)
+            stage = 3
+            delay(650)
+            stage = 4
         }
 
         Box(
@@ -406,74 +440,164 @@ class MainActivity : ComponentActivity() {
             contentAlignment = Alignment.Center
         ) {
             Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier
-                    .alpha(alpha)
-                    .scale(scale)
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Box(
-                    modifier = Modifier.size(138.dp),
+                    modifier = Modifier
+                        .size(178.dp)
+                        .graphicsLayer {
+                            scaleX = logoScale
+                            scaleY = logoScale
+                            alpha = logoAlpha
+                            rotationX = if (stage >= 1) 0f else 24f
+                            cameraDistance = 14f * density
+                        },
                     contentAlignment = Alignment.Center
                 ) {
                     Canvas(modifier = Modifier.fillMaxSize()) {
-                        val lime = Color(0xFF9BE564)
+                        val green = Color(0xFF18D866)
+                        val deepGreen = Color(0xFF087C36)
+                        val white = Color.White
                         val center = Offset(size.width / 2f, size.height / 2f)
 
                         drawCircle(
-                            color = Color(0xFF101010),
-                            radius = size.minDimension * 0.45f,
+                            color = deepGreen,
+                            radius = size.minDimension * 0.48f,
                             center = center
                         )
                         drawCircle(
-                            color = lime,
-                            radius = size.minDimension * 0.38f,
+                            color = green,
+                            radius = size.minDimension * 0.46f,
                             center = center,
                             style = Stroke(width = 5.dp.toPx())
                         )
+
+                        // Left sound bars
+                        val barX = size.width * 0.23f
+                        val barYs = listOf(0.44f, 0.38f, 0.32f, 0.38f, 0.44f)
+                        for (i in 0..4) {
+                            val x = barX + i * size.width * 0.055f
+                            val half = size.height * barYs[i] * 0.12f
+                            drawLine(
+                                color = white,
+                                start = Offset(x, center.y - half),
+                                end = Offset(x, center.y + half),
+                                strokeWidth = 4.dp.toPx()
+                            )
+                        }
+
+                        // Ear / hearing symbol
                         drawArc(
-                            color = lime,
+                            color = white,
+                            startAngle = 205f,
+                            sweepAngle = 250f,
+                            useCenter = false,
+                            topLeft = Offset(size.width * 0.38f, size.height * 0.22f),
+                            size = androidx.compose.ui.geometry.Size(size.width * 0.36f, size.height * 0.54f),
+                            style = Stroke(width = 8.dp.toPx())
+                        )
+                        drawCircle(
+                            color = white,
+                            radius = size.minDimension * 0.035f,
+                            center = Offset(size.width * 0.56f, size.height * 0.46f)
+                        )
+                        drawArc(
+                            color = white,
                             startAngle = -62f,
                             sweepAngle = 124f,
                             useCenter = false,
-                            topLeft = Offset(size.width * 0.58f, size.height * 0.31f),
-                            size = androidx.compose.ui.geometry.Size(size.width * 0.22f, size.height * 0.38f),
+                            topLeft = Offset(size.width * 0.67f, size.height * 0.34f),
+                            size = androidx.compose.ui.geometry.Size(size.width * 0.12f, size.height * 0.28f),
                             style = Stroke(width = 5.dp.toPx())
                         )
                         drawArc(
-                            color = lime,
+                            color = Color(0xFFDDFBEA),
                             startAngle = -64f,
                             sweepAngle = 128f,
                             useCenter = false,
-                            topLeft = Offset(size.width * 0.48f, size.height * 0.22f),
-                            size = androidx.compose.ui.geometry.Size(size.width * 0.42f, size.height * 0.56f),
-                            style = Stroke(width = 4.dp.toPx())
+                            topLeft = Offset(size.width * 0.72f, size.height * 0.27f),
+                            size = androidx.compose.ui.geometry.Size(size.width * 0.20f, size.height * 0.42f),
+                            style = Stroke(width = 5.dp.toPx())
                         )
                     }
-
-                    Text(
-                        text = "A",
-                        color = Color(0xFF9BE564),
-                        fontSize = 52.sp,
-                        fontWeight = FontWeight.Black
-                    )
                 }
 
                 Spacer(Modifier.height(24.dp))
 
-                Text(
-                    text = "Altaf Designer",
-                    color = Color.White,
-                    fontSize = 30.sp,
-                    fontWeight = FontWeight.ExtraBold
-                )
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = "Altaf",
+                        color = Color(0xFF063D1C),
+                        fontSize = 46.sp,
+                        fontWeight = FontWeight.Black,
+                        modifier = Modifier
+                            .offset(x = 3.dp, y = 5.dp)
+                            .graphicsLayer {
+                                scaleX = altafScale
+                                scaleY = altafScale
+                                alpha = altafAlpha
+                                rotationX = if (stage >= 2) 0f else 28f
+                                translationY = if (stage >= 2) 0f else -60f
+                                cameraDistance = 16f * density
+                            }
+                    )
+                    Text(
+                        text = "Altaf",
+                        color = Color.White,
+                        fontSize = 46.sp,
+                        fontWeight = FontWeight.Black,
+                        modifier = Modifier.graphicsLayer {
+                            scaleX = altafScale
+                            scaleY = altafScale
+                            alpha = altafAlpha
+                            rotationX = if (stage >= 2) 0f else 28f
+                            translationY = if (stage >= 2) 0f else -60f
+                            cameraDistance = 16f * density
+                        }
+                    )
+                }
 
-                Spacer(Modifier.height(8.dp))
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = "Designer",
+                        color = Color(0xFF063D1C),
+                        fontSize = 42.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        modifier = Modifier
+                            .offset(x = 3.dp, y = 5.dp)
+                            .graphicsLayer {
+                                scaleX = designerScale
+                                scaleY = designerScale
+                                alpha = designerAlpha
+                                rotationX = if (stage >= 3) 0f else -28f
+                                translationY = if (stage >= 3) 0f else 60f
+                                cameraDistance = 16f * density
+                            }
+                    )
+                    Text(
+                        text = "Designer",
+                        color = Color(0xFF9BE564),
+                        fontSize = 42.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        modifier = Modifier.graphicsLayer {
+                            scaleX = designerScale
+                            scaleY = designerScale
+                            alpha = designerAlpha
+                            rotationX = if (stage >= 3) 0f else -28f
+                            translationY = if (stage >= 3) 0f else 60f
+                            cameraDistance = 16f * density
+                        }
+                    )
+                }
+
+                Spacer(Modifier.height(14.dp))
 
                 Text(
                     text = "SOUND AMPLIFIER",
-                    color = Color(0xFF9BE564),
+                    color = Color.White,
                     fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.alpha(subtitleAlpha)
                 )
             }
         }
