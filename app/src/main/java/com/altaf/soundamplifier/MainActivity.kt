@@ -11,8 +11,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -47,8 +52,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -64,7 +73,9 @@ class MainActivity : ComponentActivity() {
 
     private var running by mutableStateOf(false)
     private var level by mutableFloatStateOf(0f)
-    private var gain by mutableFloatStateOf(1.35f)
+    private var gain by mutableFloatStateOf(2.2f)
+    private var micSensitivity by mutableFloatStateOf(1.5f)
+    private var outputBoost by mutableFloatStateOf(1200f)
     private var balance by mutableFloatStateOf(0f)
     private var noiseReduction by mutableStateOf(true)
     private var voiceFocus by mutableStateOf(true)
@@ -92,6 +103,8 @@ class MainActivity : ComponentActivity() {
 
         engine = AudioEngine(this).apply {
             gain = this@MainActivity.gain
+            micSensitivity = this@MainActivity.micSensitivity
+            outputBoostMb = this@MainActivity.outputBoost.toInt()
             balance = this@MainActivity.balance
             noiseReductionEnabled = this@MainActivity.noiseReduction
             voiceFocusEnabled = this@MainActivity.voiceFocus
@@ -113,7 +126,18 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             AltafTheme {
-                AmplifierScreen()
+                var showSplash by remember { mutableStateOf(true) }
+
+                LaunchedEffect(Unit) {
+                    delay(2200)
+                    showSplash = false
+                }
+
+                if (showSplash) {
+                    AltafSplash()
+                } else {
+                    AmplifierScreen()
+                }
             }
         }
     }
@@ -147,6 +171,8 @@ class MainActivity : ComponentActivity() {
     private fun startAmplifier() {
         engine.gain = gain
         engine.balance = balance
+        engine.setMicSensitivity(micSensitivity)
+        engine.setOutputBoostMb(outputBoost.toInt())
         engine.setNoiseReduction(noiseReduction)
         engine.setVoiceFocus(voiceFocus)
         eq.forEachIndexed { index, state ->
@@ -173,32 +199,42 @@ class MainActivity : ComponentActivity() {
 
         when (name) {
             "Conversation" -> {
-                gain = 1.45f
+                gain = 2.2f
+                micSensitivity = 1.5f
+                outputBoost = 1200f
                 noiseReduction = true
                 voiceFocus = true
-                setEq(floatArrayOf(-0.10f, 0.05f, 0.18f, 0.28f, 0.18f))
+                setEq(floatArrayOf(-0.10f, 0.06f, 0.20f, 0.30f, 0.18f))
             }
             "TV" -> {
-                gain = 1.65f
+                gain = 2.6f
+                micSensitivity = 1.7f
+                outputBoost = 1400f
                 noiseReduction = true
                 voiceFocus = false
-                setEq(floatArrayOf(0.05f, 0.10f, 0.15f, 0.18f, 0.10f))
+                setEq(floatArrayOf(0.04f, 0.10f, 0.18f, 0.22f, 0.12f))
             }
             "Outdoor" -> {
-                gain = 1.25f
+                gain = 2.0f
+                micSensitivity = 1.45f
+                outputBoost = 1000f
                 noiseReduction = true
                 voiceFocus = true
-                setEq(floatArrayOf(-0.18f, -0.05f, 0.12f, 0.22f, 0.12f))
+                setEq(floatArrayOf(-0.20f, -0.06f, 0.14f, 0.24f, 0.12f))
             }
             "Quiet Room" -> {
-                gain = 1.15f
+                gain = 1.8f
+                micSensitivity = 1.3f
+                outputBoost = 800f
                 noiseReduction = false
                 voiceFocus = false
-                setEq(floatArrayOf(0f, 0f, 0.06f, 0.08f, 0f))
+                setEq(floatArrayOf(0f, 0f, 0.06f, 0.10f, 0f))
             }
         }
 
         engine.gain = gain
+        engine.setMicSensitivity(micSensitivity)
+        engine.setOutputBoostMb(outputBoost.toInt())
         engine.setNoiseReduction(noiseReduction)
         engine.setVoiceFocus(voiceFocus)
     }
@@ -211,20 +247,125 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun safeReset() {
-        gain = 1f
+        gain = 1.2f
+        micSensitivity = 1f
+        outputBoost = 0f
         balance = 0f
         noiseReduction = true
         voiceFocus = true
         selectedPreset = "Safe"
+
         eq.forEachIndexed { index, state ->
             state.floatValue = 0f
             engine.setEqBand(index, 0f)
         }
+
         engine.gain = gain
         engine.balance = balance
+        engine.setMicSensitivity(micSensitivity)
+        engine.setOutputBoostMb(0)
         engine.setNoiseReduction(true)
         engine.setVoiceFocus(true)
         message = "Safe defaults restored."
+    }
+
+    @Composable
+    private fun AltafSplash() {
+        var started by remember { mutableStateOf(false) }
+
+        val alpha by animateFloatAsState(
+            targetValue = if (started) 1f else 0f,
+            animationSpec = tween(850, easing = FastOutSlowInEasing),
+            label = "splashAlpha"
+        )
+        val scale by animateFloatAsState(
+            targetValue = if (started) 1f else 0.78f,
+            animationSpec = tween(950, easing = FastOutSlowInEasing),
+            label = "splashScale"
+        )
+
+        LaunchedEffect(Unit) {
+            started = true
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .alpha(alpha)
+                    .scale(scale)
+            ) {
+                Box(
+                    modifier = Modifier.size(138.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val lime = Color(0xFF9BE564)
+                        val center = Offset(size.width / 2f, size.height / 2f)
+
+                        drawCircle(
+                            color = Color(0xFF101010),
+                            radius = size.minDimension * 0.45f,
+                            center = center
+                        )
+                        drawCircle(
+                            color = lime,
+                            radius = size.minDimension * 0.38f,
+                            center = center,
+                            style = Stroke(width = 5.dp.toPx())
+                        )
+                        drawArc(
+                            color = lime,
+                            startAngle = -62f,
+                            sweepAngle = 124f,
+                            useCenter = false,
+                            topLeft = Offset(size.width * 0.58f, size.height * 0.31f),
+                            size = androidx.compose.ui.geometry.Size(size.width * 0.22f, size.height * 0.38f),
+                            style = Stroke(width = 5.dp.toPx())
+                        )
+                        drawArc(
+                            color = lime,
+                            startAngle = -64f,
+                            sweepAngle = 128f,
+                            useCenter = false,
+                            topLeft = Offset(size.width * 0.48f, size.height * 0.22f),
+                            size = androidx.compose.ui.geometry.Size(size.width * 0.42f, size.height * 0.56f),
+                            style = Stroke(width = 4.dp.toPx())
+                        )
+                    }
+
+                    Text(
+                        text = "A",
+                        color = Color(0xFF9BE564),
+                        fontSize = 52.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                }
+
+                Spacer(Modifier.height(24.dp))
+
+                Text(
+                    text = "Altaf Designer",
+                    color = Color.White,
+                    fontSize = 30.sp,
+                    fontWeight = FontWeight.ExtraBold
+                )
+
+                Spacer(Modifier.height(8.dp))
+
+                Text(
+                    text = "SOUND AMPLIFIER",
+                    color = Color(0xFF9BE564),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
     }
 
     @Composable
@@ -255,7 +396,7 @@ class MainActivity : ComponentActivity() {
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Text(
-                    text = "ALTAF",
+                    text = "ALTAF DESIGNER",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary
@@ -340,7 +481,7 @@ class MainActivity : ComponentActivity() {
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        text = "Headphones or earbuds are strongly recommended. Phone-speaker playback can cause loud feedback.",
+                        text = "Use headphones or earbuds. Phone-speaker playback can cause loud feedback.",
                         color = Color(0xFFAAAAAA),
                         fontSize = 13.sp
                     )
@@ -349,18 +490,40 @@ class MainActivity : ComponentActivity() {
                 SectionCard(title = "Amplification") {
                     SettingSlider(
                         label = "Gain",
-                        valueText = String.format("%.2fx", gain),
+                        valueText = String.format("%.1fx", gain),
                         value = gain,
-                        range = 0.5f..4f,
+                        range = 1f..8f,
                         onValueChange = {
                             gain = it
                             engine.gain = it
                         }
                     )
 
-                    if (gain >= 2.5f) {
+                    SettingSlider(
+                        label = "Mic Sensitivity",
+                        valueText = String.format("%.1fx", micSensitivity),
+                        value = micSensitivity,
+                        range = 1f..3f,
+                        onValueChange = {
+                            micSensitivity = it
+                            engine.setMicSensitivity(it)
+                        }
+                    )
+
+                    SettingSlider(
+                        label = "Output Boost",
+                        valueText = String.format("%.0f dB", outputBoost / 100f),
+                        value = outputBoost,
+                        range = 0f..1800f,
+                        onValueChange = {
+                            outputBoost = it
+                            engine.setOutputBoostMb(it.toInt())
+                        }
+                    )
+
+                    if (gain >= 4f || outputBoost >= 1500f) {
                         Text(
-                            text = "High gain: lower your headphone volume before continuing.",
+                            text = "Strong boost is active. Start with low headphone volume and increase slowly.",
                             color = Color(0xFFFFB35C),
                             fontSize = 12.sp
                         )
@@ -463,7 +626,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 Text(
-                    text = "This app is a personal listening tool, not a medical device. Start at low volume and increase slowly.",
+                    text = "Personal listening tool, not a medical device. Higher boost can become loud quickly.",
                     modifier = Modifier.fillMaxWidth(),
                     textAlign = TextAlign.Center,
                     color = Color(0xFF777777),
