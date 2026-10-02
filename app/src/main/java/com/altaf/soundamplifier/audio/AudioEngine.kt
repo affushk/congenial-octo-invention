@@ -10,12 +10,14 @@ import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.Equalizer
+import android.media.audiofx.LoudnessEnhancer
 import android.media.audiofx.NoiseSuppressor
 import android.os.Process
 import androidx.core.content.ContextCompat
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.tanh
 
 class AudioEngine(private val context: Context) {
 
@@ -27,8 +29,11 @@ class AudioEngine(private val context: Context) {
     private var noiseSuppressor: NoiseSuppressor? = null
     private var automaticGainControl: AutomaticGainControl? = null
     private var equalizer: Equalizer? = null
+    private var loudnessEnhancer: LoudnessEnhancer? = null
 
-    @Volatile var gain: Float = 1.35f
+    @Volatile var gain: Float = 2.2f
+    @Volatile var micSensitivity: Float = 1.5f
+    @Volatile var outputBoostMb: Int = 1200
     @Volatile var balance: Float = 0f
     @Volatile var noiseReductionEnabled: Boolean = true
     @Volatile var voiceFocusEnabled: Boolean = true
@@ -68,7 +73,7 @@ class AudioEngine(private val context: Context) {
 
         try {
             recorder = AudioRecord.Builder()
-                .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+                .setAudioSource(MediaRecorder.AudioSource.MIC)
                 .setAudioFormat(
                     AudioFormat.Builder()
                         .setEncoding(encoding)
@@ -82,7 +87,7 @@ class AudioEngine(private val context: Context) {
             player = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                         .build()
                 )
@@ -109,8 +114,10 @@ class AudioEngine(private val context: Context) {
             setupEffects()
             applyEffectSettings()
             applyAllEq()
+            applyOutputBoost()
 
             running.set(true)
+            player?.setVolume(1f)
             player?.play()
             recorder?.startRecording()
 
@@ -166,6 +173,15 @@ class AudioEngine(private val context: Context) {
         applyEffectSettings()
     }
 
+    fun setMicSensitivity(value: Float) {
+        micSensitivity = value.coerceIn(1f, 3f)
+    }
+
+    fun setOutputBoostMb(value: Int) {
+        outputBoostMb = value.coerceIn(0, 1800)
+        applyOutputBoost()
+    }
+
     fun setEqBand(index: Int, normalized: Float) {
         if (index !in 0..4) return
         eqValues[index] = normalized.coerceIn(-1f, 1f)
@@ -189,7 +205,8 @@ class AudioEngine(private val context: Context) {
                 break
             }
 
-            val localGain = gain.coerceIn(0.5f, 4f)
+            val localGain = gain.coerceIn(1f, 8f)
+            val localMicSensitivity = micSensitivity.coerceIn(1f, 3f)
             val localBalance = balance.coerceIn(-1f, 1f)
             val leftGain = if (localBalance > 0f) 1f - localBalance else 1f
             val rightGain = if (localBalance < 0f) 1f + localBalance else 1f
@@ -200,8 +217,9 @@ class AudioEngine(private val context: Context) {
                 val raw = input[i].toInt()
                 peak = max(peak, abs(raw))
 
-                val amplified = (raw * localGain).toInt()
-                    .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                val boosted = raw.toFloat() * localGain * localMicSensitivity
+                val amplified = softClip(boosted)
+
                 val left = (amplified * leftGain).toInt()
                     .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
                 val right = (amplified * rightGain).toInt()
@@ -222,12 +240,18 @@ class AudioEngine(private val context: Context) {
             meterCounter++
             if (meterCounter >= 3) {
                 meterCounter = 0
-                val normalized = (peak / 32767f).coerceIn(0f, 1f)
+                val normalized = (peak * localGain * localMicSensitivity / 32767f)
+                    .coerceIn(0f, 1f)
                 levelListener?.invoke(normalized)
             }
         }
 
         running.set(false)
+    }
+
+    private fun softClip(value: Float): Float {
+        val normalized = (value / 32768f).coerceIn(-4f, 4f)
+        return (tanh(normalized.toDouble()) * 32767.0).toFloat()
     }
 
     private fun setupEffects() {
@@ -255,16 +279,32 @@ class AudioEngine(private val context: Context) {
         } catch (_: Throwable) {
             equalizer = null
         }
+
+        try {
+            loudnessEnhancer = LoudnessEnhancer(trackSession).apply {
+                enabled = true
+            }
+        } catch (_: Throwable) {
+            loudnessEnhancer = null
+        }
     }
 
     private fun applyEffectSettings() {
         try {
-            noiseSuppressor?.enabled = noiseReductionEnabled || voiceFocusEnabled
+            noiseSuppressor?.enabled = noiseReductionEnabled
         } catch (_: Throwable) {
         }
 
         try {
             automaticGainControl?.enabled = voiceFocusEnabled
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun applyOutputBoost() {
+        try {
+            loudnessEnhancer?.setTargetGain(outputBoostMb)
+            loudnessEnhancer?.enabled = outputBoostMb > 0
         } catch (_: Throwable) {
         }
     }
@@ -301,6 +341,12 @@ class AudioEngine(private val context: Context) {
     }
 
     private fun cleanup() {
+        try {
+            loudnessEnhancer?.release()
+        } catch (_: Throwable) {
+        }
+        loudnessEnhancer = null
+
         try {
             noiseSuppressor?.release()
         } catch (_: Throwable) {
