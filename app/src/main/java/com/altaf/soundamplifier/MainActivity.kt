@@ -171,8 +171,8 @@ class MainActivity : ComponentActivity() {
     private fun startAmplifier() {
         engine.gain = gain
         engine.balance = balance
-        engine.setMicSensitivity(micSensitivity)
-        engine.setOutputBoostMb(outputBoost.toInt())
+        engine.updateMicSensitivity(micSensitivity)
+        engine.updateOutputBoostMb(outputBoost.toInt())
         engine.setNoiseReduction(noiseReduction)
         engine.setVoiceFocus(voiceFocus)
         eq.forEachIndexed { index, state ->
@@ -233,8 +233,8 @@ class MainActivity : ComponentActivity() {
         }
 
         engine.gain = gain
-        engine.setMicSensitivity(micSensitivity)
-        engine.setOutputBoostMb(outputBoost.toInt())
+        engine.updateMicSensitivity(micSensitivity)
+        engine.updateOutputBoostMb(outputBoost.toInt())
         engine.setNoiseReduction(noiseReduction)
         engine.setVoiceFocus(voiceFocus)
     }
@@ -262,8 +262,8 @@ class MainActivity : ComponentActivity() {
 
         engine.gain = gain
         engine.balance = balance
-        engine.setMicSensitivity(micSensitivity)
-        engine.setOutputBoostMb(0)
+        engine.updateMicSensitivity(micSensitivity)
+        engine.updateOutputBoostMb(0)
         engine.setNoiseReduction(true)
         engine.setVoiceFocus(true)
         message = "Safe defaults restored."
@@ -506,7 +506,7 @@ class MainActivity : ComponentActivity() {
                         range = 1f..3f,
                         onValueChange = {
                             micSensitivity = it
-                            engine.setMicSensitivity(it)
+                            engine.updateMicSensitivity(it)
                         }
                     )
 
@@ -517,7 +517,7 @@ class MainActivity : ComponentActivity() {
                         range = 0f..1800f,
                         onValueChange = {
                             outputBoost = it
-                            engine.setOutputBoostMb(it.toInt())
+                            engine.updateOutputBoostMb(it.toInt())
                         }
                     )
 
