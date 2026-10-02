@@ -2,6 +2,7 @@ package com.altaf.soundamplifier
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
@@ -63,12 +64,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import com.altaf.soundamplifier.audio.AudioEngine
 import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
 
-    private lateinit var engine: AudioEngine
     private var pendingStart = false
 
     private var running by mutableStateOf(false)
@@ -101,29 +100,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        engine = AudioEngine(this).apply {
-            gain = this@MainActivity.gain
-            micSensitivity = this@MainActivity.micSensitivity
-            outputBoostMb = this@MainActivity.outputBoost.toInt()
-            balance = this@MainActivity.balance
-            noiseReductionEnabled = this@MainActivity.noiseReduction
-            voiceFocusEnabled = this@MainActivity.voiceFocus
-
-            levelListener = { value ->
-                runOnUiThread {
-                    level = value
-                    if (!isRunning() && running) running = false
-                }
-            }
-
-            errorListener = { text ->
-                runOnUiThread {
-                    message = text
-                    if (!isRunning()) running = false
-                }
-            }
-        }
-
         setContent {
             AltafTheme {
                 var showSplash by remember { mutableStateOf(true) }
@@ -142,9 +118,29 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onDestroy() {
-        engine.stop()
-        super.onDestroy()
+    override fun onStart() {
+        super.onStart()
+
+        SoundAmplifierService.listener = { active, meter, text ->
+            runOnUiThread {
+                running = active
+                level = meter
+                message = text
+            }
+        }
+
+        running = SoundAmplifierService.isAmplifying
+        level = SoundAmplifierService.currentLevel
+        message = if (running) {
+            SoundAmplifierService.lastMessage
+        } else {
+            "Connect headphones, then tap Start."
+        }
+    }
+
+    override fun onStop() {
+        SoundAmplifierService.listener = null
+        super.onStop()
     }
 
     private fun requestStart() {
@@ -161,37 +157,63 @@ class MainActivity : ComponentActivity() {
         pendingStart = true
         val permissions = buildList {
             add(Manifest.permission.RECORD_AUDIO)
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 add(Manifest.permission.BLUETOOTH_CONNECT)
             }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
         }
+
         permissionLauncher.launch(permissions.toTypedArray())
     }
 
-    private fun startAmplifier() {
-        engine.gain = gain
-        engine.balance = balance
-        engine.updateMicSensitivity(micSensitivity)
-        engine.updateOutputBoostMb(outputBoost.toInt())
-        engine.setNoiseReduction(noiseReduction)
-        engine.setVoiceFocus(voiceFocus)
-        eq.forEachIndexed { index, state ->
-            engine.setEqBand(index, state.floatValue)
-        }
-
-        running = engine.start()
-        message = if (running) {
-            "Live amplification is active."
-        } else {
-            "Could not start live amplification."
+    private fun serviceIntent(actionName: String): Intent {
+        return Intent(this, SoundAmplifierService::class.java).apply {
+            action = actionName
+            putExtra(SoundAmplifierService.EXTRA_GAIN, gain)
+            putExtra(SoundAmplifierService.EXTRA_MIC_SENSITIVITY, micSensitivity)
+            putExtra(SoundAmplifierService.EXTRA_OUTPUT_BOOST, outputBoost.toInt())
+            putExtra(SoundAmplifierService.EXTRA_BALANCE, balance)
+            putExtra(SoundAmplifierService.EXTRA_NOISE_REDUCTION, noiseReduction)
+            putExtra(SoundAmplifierService.EXTRA_VOICE_FOCUS, voiceFocus)
+            putExtra(
+                SoundAmplifierService.EXTRA_EQ,
+                FloatArray(eq.size) { index -> eq[index].floatValue }
+            )
         }
     }
 
+    private fun startAmplifier() {
+        ContextCompat.startForegroundService(
+            this,
+            serviceIntent(SoundAmplifierService.ACTION_START)
+        )
+
+        running = true
+        message = "Starting background amplification…"
+    }
+
     private fun stopAmplifier() {
-        engine.stop()
+        startService(
+            Intent(this, SoundAmplifierService::class.java).apply {
+                action = SoundAmplifierService.ACTION_STOP
+            }
+        )
+
         running = false
         level = 0f
         message = "Amplifier stopped."
+    }
+
+    private fun pushSettings() {
+        if (!SoundAmplifierService.isAmplifying) return
+
+        startService(
+            serviceIntent(SoundAmplifierService.ACTION_UPDATE)
+        )
     }
 
     private fun applyPreset(name: String) {
@@ -232,17 +254,12 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        engine.gain = gain
-        engine.updateMicSensitivity(micSensitivity)
-        engine.updateOutputBoostMb(outputBoost.toInt())
-        engine.setNoiseReduction(noiseReduction)
-        engine.setVoiceFocus(voiceFocus)
+        pushSettings()
     }
 
     private fun setEq(values: FloatArray) {
         values.forEachIndexed { index, value ->
             eq[index].floatValue = value
-            engine.setEqBand(index, value)
         }
     }
 
@@ -255,18 +272,16 @@ class MainActivity : ComponentActivity() {
         voiceFocus = true
         selectedPreset = "Safe"
 
-        eq.forEachIndexed { index, state ->
+        eq.forEach { state ->
             state.floatValue = 0f
-            engine.setEqBand(index, 0f)
         }
 
-        engine.gain = gain
-        engine.balance = balance
-        engine.updateMicSensitivity(micSensitivity)
-        engine.updateOutputBoostMb(0)
-        engine.setNoiseReduction(true)
-        engine.setVoiceFocus(true)
-        message = "Safe defaults restored."
+        pushSettings()
+        message = if (running) {
+            "Safe defaults restored. Background amplification is active."
+        } else {
+            "Safe defaults restored."
+        }
     }
 
     @Composable
@@ -495,7 +510,7 @@ class MainActivity : ComponentActivity() {
                         range = 1f..8f,
                         onValueChange = {
                             gain = it
-                            engine.gain = it
+                            pushSettings()
                         }
                     )
 
@@ -506,7 +521,7 @@ class MainActivity : ComponentActivity() {
                         range = 1f..3f,
                         onValueChange = {
                             micSensitivity = it
-                            engine.updateMicSensitivity(it)
+                            pushSettings()
                         }
                     )
 
@@ -517,7 +532,7 @@ class MainActivity : ComponentActivity() {
                         range = 0f..1800f,
                         onValueChange = {
                             outputBoost = it
-                            engine.updateOutputBoostMb(it.toInt())
+                            pushSettings()
                         }
                     )
 
@@ -540,7 +555,7 @@ class MainActivity : ComponentActivity() {
                         range = -1f..1f,
                         onValueChange = {
                             balance = it
-                            engine.balance = it
+                            pushSettings()
                         }
                     )
                 }
@@ -552,7 +567,7 @@ class MainActivity : ComponentActivity() {
                         checked = noiseReduction,
                         onCheckedChange = {
                             noiseReduction = it
-                            engine.setNoiseReduction(it)
+                            pushSettings()
                         }
                     )
 
@@ -562,7 +577,7 @@ class MainActivity : ComponentActivity() {
                         checked = voiceFocus,
                         onCheckedChange = {
                             voiceFocus = it
-                            engine.setVoiceFocus(it)
+                            pushSettings()
                         }
                     )
                 }
@@ -607,7 +622,7 @@ class MainActivity : ComponentActivity() {
                             range = -1f..1f,
                             onValueChange = {
                                 eq[index].floatValue = it
-                                engine.setEqBand(index, it)
+                                pushSettings()
                             }
                         )
                     }
