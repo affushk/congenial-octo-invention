@@ -916,6 +916,54 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (speechFocus) Color(0xFF12351F) else Color(0xFF101010)
+                    ),
+                    shape = RoundedCornerShape(22.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            text = "CLEAR VOICE",
+                            color = Color.White,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+
+                        Text(
+                            text = if (speechFocus) {
+                                "ON • Speech-focused filtering active"
+                            } else {
+                                "OFF • Tap below to make speech stand out"
+                            },
+                            color = if (speechFocus) Color(0xFF9BE564) else Color(0xFFAAAAAA),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+
+                        Button(
+                            onClick = { setClearVoiceMode(!speechFocus) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(58.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (speechFocus) Color(0xFF9BE564) else Color(0xFF202020),
+                                contentColor = if (speechFocus) Color.Black else Color.White
+                            ),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Text(
+                                text = if (speechFocus) "CLEAR VOICE ON" else "TURN ON CLEAR VOICE",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+                    }
+                }
+
                 SectionCard(title = "Audio output") {
                     Text(
                         text = route,
@@ -1057,32 +1105,6 @@ class MainActivity : ComponentActivity() {
                             adaptiveNoise = it
                             pushSettings()
                         }
-                    )
-                }
-
-                SectionCard(title = "Clear Voice Mode") {
-                    ToggleRow(
-                        title = "Clear Voice",
-                        subtitle = "Strong best-effort speech filtering. Reduces fan/AC/rumble/hiss and boosts speech clarity.",
-                        checked = speechFocus,
-                        onCheckedChange = { setClearVoiceMode(it) }
-                    )
-
-                    Text(
-                        text = if (speechFocus) {
-                            "ACTIVE • Clear Voice filtering is on"
-                        } else {
-                            "OFF • Turn this on when you mainly want speech to stand out"
-                        },
-                        color = if (speechFocus) Color(0xFF9BE564) else Color(0xFFAAAAAA),
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp
-                    )
-
-                    Text(
-                        text = "It cannot perfectly remove music, overlapping speakers, or every non-speech sound, but it now uses stronger voice-band filtering and gating.",
-                        color = Color(0xFF8E8E8E),
-                        fontSize = 12.sp
                     )
                 }
 
