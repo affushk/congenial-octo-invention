@@ -253,12 +253,14 @@ class AudioEngine(private val context: Context) {
 
             val rms = sqrt(sumSquares / read.coerceAtLeast(1)).toFloat()
 
-            val adaptiveGate = if (adaptiveNoiseEnabled) {
-                if (rms < noiseFloorRms * 2.2f) {
+            val adaptiveGate = if (adaptiveNoiseEnabled || speechFocusEnabled) {
+                if (rms < noiseFloorRms * 2.4f) {
                     noiseFloorRms = (noiseFloorRms * 0.992f) + (rms * 0.008f)
                 }
 
                 when {
+                    speechFocusEnabled && rms < max(220f, noiseFloorRms * 1.18f) -> 0.10f
+                    speechFocusEnabled && rms < max(420f, noiseFloorRms * 1.52f) -> 0.34f
                     rms < max(180f, noiseFloorRms * 1.15f) -> 0.48f
                     rms < max(350f, noiseFloorRms * 1.45f) -> 0.72f
                     else -> 1f
@@ -289,7 +291,7 @@ class AudioEngine(private val context: Context) {
                 previousLowPass += 0.42f * (highPass - previousLowPass)
 
                 var processed = when {
-                    speechFocusEnabled -> (previousLowPass * 1.18f) + (highPass * 0.18f)
+                    speechFocusEnabled -> (previousLowPass * 1.30f) + (highPass * 0.24f)
                     smartVoiceEnabled -> (raw * 0.78f) + (highPass * 0.55f)
                     else -> raw
                 }
