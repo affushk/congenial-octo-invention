@@ -349,7 +349,7 @@ class SoundAmplifierService : Service() {
             )
         } else {
             builder.addAction(
-                android.R.drawable.presence_audio_online,
+                android.R.drawable.ic_btn_speak_now,
                 "Record",
                 serviceAction(ACTION_START_RECORDING, 4)
             )
