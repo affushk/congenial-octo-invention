@@ -529,6 +529,11 @@ class MainActivity : ComponentActivity() {
 
         val target = File(file.parentFile, "$clean.wav")
 
+        if (target.absolutePath.equals(file.absolutePath, ignoreCase = true)) {
+            message = "Recording is already saved with this name."
+            return
+        }
+
         if (target.exists()) {
             message = "A recording with that name already exists."
             return
@@ -543,6 +548,31 @@ class MainActivity : ComponentActivity() {
         } else {
             message = "Could not rename recording."
         }
+    }
+
+    private fun setClearVoiceMode(enabled: Boolean) {
+        speechFocus = enabled
+
+        if (enabled) {
+            noiseReduction = true
+            voiceFocus = true
+            smartVoice = true
+            compressor = true
+            adaptiveNoise = true
+
+            setEq(
+                floatArrayOf(
+                    -0.45f, -0.35f, -0.18f, 0.08f, 0.24f,
+                    0.38f, 0.34f, 0.18f, 0.02f, -0.12f
+                )
+            )
+
+            message = "Clear Voice Mode enabled — strong speech-focused filtering is active."
+        } else {
+            message = "Clear Voice Mode disabled."
+        }
+
+        pushSettings()
     }
 
     private fun formatDuration(totalSeconds: Long): String {
@@ -1030,12 +1060,38 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
+                SectionCard(title = "Clear Voice Mode") {
+                    ToggleRow(
+                        title = "Clear Voice",
+                        subtitle = "Strong best-effort speech filtering. Reduces fan/AC/rumble/hiss and boosts speech clarity.",
+                        checked = speechFocus,
+                        onCheckedChange = { setClearVoiceMode(it) }
+                    )
+
+                    Text(
+                        text = if (speechFocus) {
+                            "ACTIVE • Clear Voice filtering is on"
+                        } else {
+                            "OFF • Turn this on when you mainly want speech to stand out"
+                        },
+                        color = if (speechFocus) Color(0xFF9BE564) else Color(0xFFAAAAAA),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+
+                    Text(
+                        text = "It cannot perfectly remove music, overlapping speakers, or every non-speech sound, but it now uses stronger voice-band filtering and gating.",
+                        color = Color(0xFF8E8E8E),
+                        fontSize = 12.sp
+                    )
+                }
+
                 SectionCard(title = "Local Recording") {
                     Text(
                         text = if (recording) {
                             "RECORDING • ${formatDuration(recordingSeconds)}"
                         } else {
-                            "Record the processed speech-focused audio as a local WAV file."
+                            "Record the processed speech-focused audio as WAV. After Stop & Save, a copy is saved to Music/Altaf Sound Amplifier."
                         },
                         color = if (recording) Color(0xFFFF6B6B) else Color.White,
                         fontWeight = FontWeight.Bold
@@ -1261,7 +1317,7 @@ class MainActivity : ComponentActivity() {
                         contentColor = Color(0xFF9BE564)
                     )
                 ) {
-                    Text("Save name")
+                    Text("RENAME & SAVE")
                 }
             }
         }
