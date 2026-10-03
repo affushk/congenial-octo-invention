@@ -6,14 +6,21 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.os.Environment
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import com.altaf.soundamplifier.audio.AudioEngine
+import com.altaf.soundamplifier.audio.WavRecorder
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class SoundAmplifierService : Service() {
 
     private lateinit var engine: AudioEngine
+    private val wavRecorder = WavRecorder(sampleRate = 48_000, channels = 1)
     private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
@@ -31,6 +38,12 @@ class SoundAmplifierService : Service() {
                 isAmplifying = false
                 listener?.invoke(false, currentLevel, lastMessage, currentGain)
             }
+
+            processedAudioSink = { samples, count ->
+                if (isRecording) {
+                    wavRecorder.enqueue(samples, count)
+                }
+            }
         }
     }
 
@@ -40,6 +53,8 @@ class SoundAmplifierService : Service() {
             ACTION_UPDATE -> updateSettings(intent)
             ACTION_GAIN_UP -> adjustGain(0.25f)
             ACTION_GAIN_DOWN -> adjustGain(-0.25f)
+            ACTION_START_RECORDING -> startRecording()
+            ACTION_STOP_RECORDING -> stopRecording()
             ACTION_STOP -> stopAmplifier()
         }
 
@@ -47,6 +62,8 @@ class SoundAmplifierService : Service() {
     }
 
     override fun onDestroy() {
+        stopRecording()
+
         try {
             engine.stop()
         } catch (_: Throwable) {
@@ -94,7 +111,11 @@ class SoundAmplifierService : Service() {
         applySettings(intent)
 
         if (isAmplifying) {
-            lastMessage = "Advanced live processing is active."
+            lastMessage = if (isRecording) {
+                "Recording active • processed speech audio is being saved locally."
+            } else {
+                "Advanced live processing is active."
+            }
             updateNotification()
             listener?.invoke(true, currentLevel, lastMessage, currentGain)
         }
@@ -105,12 +126,73 @@ class SoundAmplifierService : Service() {
 
         currentGain = (currentGain + delta).coerceIn(1f, 8f)
         engine.gain = currentGain
-        lastMessage = "Gain ${String.format("%.2fx", currentGain)} • background listening active"
+        lastMessage = if (isRecording) {
+            "Recording active • Gain ${String.format("%.2fx", currentGain)}"
+        } else {
+            "Gain ${String.format("%.2fx", currentGain)} • background listening active"
+        }
         updateNotification()
         listener?.invoke(true, currentLevel, lastMessage, currentGain)
     }
 
+    private fun startRecording() {
+        if (!isAmplifying) {
+            lastMessage = "Start live amplification before recording."
+            listener?.invoke(false, currentLevel, lastMessage, currentGain)
+            return
+        }
+
+        if (isRecording) return
+
+        val directory = recordingsDirectory()
+        directory.mkdirs()
+
+        val stamp = SimpleDateFormat(
+            "yyyyMMdd_HHmmss",
+            Locale.US
+        ).format(Date())
+
+        val file = File(
+            directory,
+            "Altaf_Speech_$stamp.wav"
+        )
+
+        if (wavRecorder.start(file)) {
+            isRecording = true
+            recordingStartedAt = System.currentTimeMillis()
+            lastRecordingPath = file.absolutePath
+            lastMessage = "Recording active • visible indicator is on."
+            updateNotification()
+            listener?.invoke(true, currentLevel, lastMessage, currentGain)
+        } else {
+            lastMessage = "Could not start local recording."
+            listener?.invoke(true, currentLevel, lastMessage, currentGain)
+        }
+    }
+
+    private fun stopRecording() {
+        if (!isRecording) return
+
+        val saved = wavRecorder.stop()
+        isRecording = false
+        recordingStartedAt = 0L
+
+        if (saved != null) {
+            lastRecordingPath = saved.absolutePath
+            lastMessage = "Recording saved locally: ${saved.name}"
+        } else {
+            lastMessage = "Recording stopped."
+        }
+
+        if (isAmplifying) {
+            updateNotification()
+            listener?.invoke(true, currentLevel, lastMessage, currentGain)
+        }
+    }
+
     private fun stopAmplifier() {
+        stopRecording()
+
         try {
             engine.stop()
         } catch (_: Throwable) {
@@ -146,6 +228,7 @@ class SoundAmplifierService : Service() {
         )
         engine.updateAdvancedProcessing(
             smartVoice = intent.getBooleanExtra(EXTRA_SMART_VOICE, true),
+            speechFocus = intent.getBooleanExtra(EXTRA_SPEECH_FOCUS, true),
             compressor = intent.getBooleanExtra(EXTRA_COMPRESSOR, true),
             feedbackGuard = intent.getBooleanExtra(EXTRA_FEEDBACK_GUARD, true),
             adaptiveNoise = intent.getBooleanExtra(EXTRA_ADAPTIVE_NOISE, true)
@@ -157,6 +240,14 @@ class SoundAmplifierService : Service() {
                 engine.setEqBand(i, eq[i])
             }
         }
+    }
+
+    private fun recordingsDirectory(): File {
+        val musicRoot = getExternalFilesDir(Environment.DIRECTORY_MUSIC)
+        return File(
+            musicRoot ?: filesDir,
+            "AltafSoundAmplifier/Recordings"
+        )
     }
 
     private fun acquireWakeLock() {
@@ -190,7 +281,7 @@ class SoundAmplifierService : Service() {
             "Sound Amplifier",
             NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "Keeps live sound amplification running in the background."
+            description = "Shows when live listening or local recording is active."
             setSound(null, null)
         }
 
@@ -221,12 +312,18 @@ class SoundAmplifierService : Service() {
             )
         }
 
-        val status = statusOverride
-            ?: "Listening in background • Gain ${String.format("%.2fx", currentGain)}"
+        val status = statusOverride ?: if (isRecording) {
+            "RECORDING • processed speech audio is being saved locally"
+        } else {
+            "Listening in background • Gain ${String.format("%.2fx", currentGain)}"
+        }
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentTitle("Altaf Sound Amplifier")
+            .setContentTitle(
+                if (isRecording) "Altaf Sound Amplifier • Recording"
+                else "Altaf Sound Amplifier"
+            )
             .setContentText(status)
             .setContentIntent(contentPendingIntent)
             .setOngoing(true)
@@ -243,12 +340,28 @@ class SoundAmplifierService : Service() {
                 "Gain +",
                 serviceAction(ACTION_GAIN_UP, 3)
             )
-            .addAction(
+
+        if (isRecording) {
+            builder.addAction(
                 android.R.drawable.ic_media_pause,
-                "Stop",
-                serviceAction(ACTION_STOP, 4)
+                "Stop recording",
+                serviceAction(ACTION_STOP_RECORDING, 4)
             )
-            .build()
+        } else {
+            builder.addAction(
+                android.R.drawable.presence_audio_online,
+                "Record",
+                serviceAction(ACTION_START_RECORDING, 4)
+            )
+        }
+
+        builder.addAction(
+            android.R.drawable.ic_menu_close_clear_cancel,
+            "Stop",
+            serviceAction(ACTION_STOP, 5)
+        )
+
+        return builder.build()
     }
 
     private fun updateNotification() {
@@ -261,6 +374,8 @@ class SoundAmplifierService : Service() {
         const val ACTION_UPDATE = "com.altaf.soundamplifier.action.UPDATE"
         const val ACTION_GAIN_UP = "com.altaf.soundamplifier.action.GAIN_UP"
         const val ACTION_GAIN_DOWN = "com.altaf.soundamplifier.action.GAIN_DOWN"
+        const val ACTION_START_RECORDING = "com.altaf.soundamplifier.action.START_RECORDING"
+        const val ACTION_STOP_RECORDING = "com.altaf.soundamplifier.action.STOP_RECORDING"
         const val ACTION_STOP = "com.altaf.soundamplifier.action.STOP"
 
         const val EXTRA_GAIN = "gain"
@@ -270,6 +385,7 @@ class SoundAmplifierService : Service() {
         const val EXTRA_NOISE_REDUCTION = "noise_reduction"
         const val EXTRA_VOICE_FOCUS = "voice_focus"
         const val EXTRA_SMART_VOICE = "smart_voice"
+        const val EXTRA_SPEECH_FOCUS = "speech_focus"
         const val EXTRA_COMPRESSOR = "compressor"
         const val EXTRA_FEEDBACK_GUARD = "feedback_guard"
         const val EXTRA_ADAPTIVE_NOISE = "adaptive_noise"
@@ -279,6 +395,9 @@ class SoundAmplifierService : Service() {
         private const val NOTIFICATION_ID = 1001
 
         @Volatile var isAmplifying: Boolean = false
+        @Volatile var isRecording: Boolean = false
+        @Volatile var recordingStartedAt: Long = 0L
+        @Volatile var lastRecordingPath: String? = null
         @Volatile var currentLevel: Float = 0f
         @Volatile var currentGain: Float = 2.2f
         @Volatile var lastMessage: String = "Connect headphones, then tap Start."
