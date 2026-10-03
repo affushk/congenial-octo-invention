@@ -5,10 +5,13 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ContentValues
 import android.content.Intent
+import android.os.Build
 import android.os.Environment
 import android.os.IBinder
 import android.os.PowerManager
+import android.provider.MediaStore
 import androidx.core.app.NotificationCompat
 import com.altaf.soundamplifier.audio.AudioEngine
 import com.altaf.soundamplifier.audio.WavRecorder
@@ -179,7 +182,12 @@ class SoundAmplifierService : Service() {
 
         if (saved != null) {
             lastRecordingPath = saved.absolutePath
-            lastMessage = "Recording saved locally: ${saved.name}"
+            val publicSaved = publishToMusic(saved)
+            lastMessage = if (publicSaved) {
+                "Recording saved to Music/Altaf Sound Amplifier: ${saved.name}"
+            } else {
+                "Recording saved in app storage: ${saved.name}"
+            }
         } else {
             lastMessage = "Recording stopped."
         }
@@ -239,6 +247,43 @@ class SoundAmplifierService : Service() {
             for (i in 0 until minOf(10, eq.size)) {
                 engine.setEqBand(i, eq[i])
             }
+        }
+    }
+
+    private fun publishToMusic(source: File): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return false
+        }
+
+        return try {
+            val values = ContentValues().apply {
+                put(MediaStore.Audio.Media.DISPLAY_NAME, source.name)
+                put(MediaStore.Audio.Media.MIME_TYPE, "audio/wav")
+                put(
+                    MediaStore.Audio.Media.RELATIVE_PATH,
+                    Environment.DIRECTORY_MUSIC + "/Altaf Sound Amplifier"
+                )
+                put(MediaStore.Audio.Media.IS_PENDING, 1)
+            }
+
+            val uri = contentResolver.insert(
+                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                values
+            ) ?: return false
+
+            contentResolver.openOutputStream(uri)?.use { output ->
+                source.inputStream().use { input ->
+                    input.copyTo(output)
+                }
+            } ?: return false
+
+            val done = ContentValues().apply {
+                put(MediaStore.Audio.Media.IS_PENDING, 0)
+            }
+            contentResolver.update(uri, done, null, null)
+            true
+        } catch (_: Throwable) {
+            false
         }
     }
 
