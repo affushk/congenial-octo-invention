@@ -6,7 +6,9 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.media.MediaPlayer
 import android.os.Build
+import android.os.Environment
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -40,6 +42,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -67,6 +70,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
+import java.io.File
 
 class MainActivity : ComponentActivity() {
 
@@ -81,12 +85,18 @@ class MainActivity : ComponentActivity() {
     private var noiseReduction by mutableStateOf(true)
     private var voiceFocus by mutableStateOf(true)
     private var smartVoice by mutableStateOf(true)
+    private var speechFocus by mutableStateOf(true)
     private var compressor by mutableStateOf(true)
     private var feedbackGuard by mutableStateOf(true)
     private var adaptiveNoise by mutableStateOf(true)
     private var selectedPreset by mutableStateOf("Conversation")
     private val eq = List(10) { mutableFloatStateOf(0f) }
     private var message by mutableStateOf("Connect headphones, then tap Start.")
+    private var recording by mutableStateOf(false)
+    private var recordingSeconds by mutableStateOf(0L)
+    private var recordings by mutableStateOf<List<File>>(emptyList())
+    private var playingPath by mutableStateOf<String?>(null)
+    private var mediaPlayer: MediaPlayer? = null
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -133,10 +143,12 @@ class MainActivity : ComponentActivity() {
                 level = meter
                 message = text
                 gain = serviceGain
+                recording = SoundAmplifierService.isRecording
             }
         }
 
         running = SoundAmplifierService.isAmplifying
+        recording = SoundAmplifierService.isRecording
         level = SoundAmplifierService.currentLevel
         if (running) {
             gain = SoundAmplifierService.currentGain
@@ -146,6 +158,17 @@ class MainActivity : ComponentActivity() {
         } else {
             "Connect headphones, then tap Start."
         }
+
+        refreshRecordings()
+    }
+
+    override fun onDestroy() {
+        try {
+            mediaPlayer?.release()
+        } catch (_: Throwable) {
+        }
+        mediaPlayer = null
+        super.onDestroy()
     }
 
     override fun onStop() {
@@ -190,6 +213,7 @@ class MainActivity : ComponentActivity() {
             putExtra(SoundAmplifierService.EXTRA_NOISE_REDUCTION, noiseReduction)
             putExtra(SoundAmplifierService.EXTRA_VOICE_FOCUS, voiceFocus)
             putExtra(SoundAmplifierService.EXTRA_SMART_VOICE, smartVoice)
+            putExtra(SoundAmplifierService.EXTRA_SPEECH_FOCUS, speechFocus)
             putExtra(SoundAmplifierService.EXTRA_COMPRESSOR, compressor)
             putExtra(SoundAmplifierService.EXTRA_FEEDBACK_GUARD, feedbackGuard)
             putExtra(SoundAmplifierService.EXTRA_ADAPTIVE_NOISE, adaptiveNoise)
@@ -241,6 +265,7 @@ class MainActivity : ComponentActivity() {
                 noiseReduction = true
                 voiceFocus = true
                 smartVoice = true
+                speechFocus = true
                 compressor = true
                 feedbackGuard = true
                 adaptiveNoise = true
@@ -256,6 +281,7 @@ class MainActivity : ComponentActivity() {
                 noiseReduction = true
                 voiceFocus = false
                 smartVoice = true
+                speechFocus = true
                 compressor = true
                 feedbackGuard = true
                 adaptiveNoise = false
@@ -271,6 +297,7 @@ class MainActivity : ComponentActivity() {
                 noiseReduction = true
                 voiceFocus = true
                 smartVoice = true
+                speechFocus = true
                 compressor = true
                 feedbackGuard = true
                 adaptiveNoise = true
@@ -286,6 +313,7 @@ class MainActivity : ComponentActivity() {
                 noiseReduction = false
                 voiceFocus = false
                 smartVoice = true
+                speechFocus = true
                 compressor = true
                 feedbackGuard = true
                 adaptiveNoise = false
@@ -313,6 +341,7 @@ class MainActivity : ComponentActivity() {
         noiseReduction = true
         voiceFocus = true
         smartVoice = true
+        speechFocus = true
         compressor = true
         feedbackGuard = true
         adaptiveNoise = true
@@ -341,6 +370,7 @@ class MainActivity : ComponentActivity() {
         editor.putBoolean("noiseReduction", noiseReduction)
         editor.putBoolean("voiceFocus", voiceFocus)
         editor.putBoolean("smartVoice", smartVoice)
+        editor.putBoolean("speechFocus", speechFocus)
         editor.putBoolean("compressor", compressor)
         editor.putBoolean("feedbackGuard", feedbackGuard)
         editor.putBoolean("adaptiveNoise", adaptiveNoise)
@@ -369,6 +399,7 @@ class MainActivity : ComponentActivity() {
         noiseReduction = prefs.getBoolean("noiseReduction", true)
         voiceFocus = prefs.getBoolean("voiceFocus", true)
         smartVoice = prefs.getBoolean("smartVoice", true)
+        speechFocus = prefs.getBoolean("speechFocus", true)
         compressor = prefs.getBoolean("compressor", true)
         feedbackGuard = prefs.getBoolean("feedbackGuard", true)
         adaptiveNoise = prefs.getBoolean("adaptiveNoise", true)
@@ -380,6 +411,144 @@ class MainActivity : ComponentActivity() {
         selectedPreset = "My Preset"
         pushSettings()
         message = "My Preset loaded."
+    }
+
+    private fun startRecording() {
+        if (!running) {
+            message = "Start live amplification first, then start recording."
+            return
+        }
+
+        startService(
+            Intent(this, SoundAmplifierService::class.java).apply {
+                action = SoundAmplifierService.ACTION_START_RECORDING
+            }
+        )
+
+        recording = true
+        message = "Starting visible local recording…"
+    }
+
+    private fun stopRecording() {
+        startService(
+            Intent(this, SoundAmplifierService::class.java).apply {
+                action = SoundAmplifierService.ACTION_STOP_RECORDING
+            }
+        )
+
+        recording = false
+        recordingSeconds = 0
+        message = "Stopping and saving recording…"
+
+        window.decorView.postDelayed({
+            refreshRecordings()
+        }, 700)
+    }
+
+    private fun recordingsDirectory(): File {
+        val musicRoot = getExternalFilesDir(Environment.DIRECTORY_MUSIC)
+        return File(
+            musicRoot ?: filesDir,
+            "AltafSoundAmplifier/Recordings"
+        )
+    }
+
+    private fun refreshRecordings() {
+        val directory = recordingsDirectory()
+        directory.mkdirs()
+
+        recordings = directory
+            .listFiles { file -> file.isFile && file.extension.equals("wav", true) }
+            ?.sortedByDescending { it.lastModified() }
+            ?: emptyList()
+    }
+
+    private fun playRecording(file: File) {
+        try {
+            mediaPlayer?.release()
+        } catch (_: Throwable) {
+        }
+
+        if (playingPath == file.absolutePath) {
+            playingPath = null
+            mediaPlayer = null
+            return
+        }
+
+        try {
+            mediaPlayer = MediaPlayer().apply {
+                setDataSource(file.absolutePath)
+                prepare()
+                setOnCompletionListener {
+                    playingPath = null
+                    try {
+                        it.release()
+                    } catch (_: Throwable) {
+                    }
+                    mediaPlayer = null
+                }
+                start()
+            }
+
+            playingPath = file.absolutePath
+        } catch (_: Throwable) {
+            playingPath = null
+            message = "Could not play this recording."
+        }
+    }
+
+    private fun deleteRecording(file: File) {
+        if (playingPath == file.absolutePath) {
+            try {
+                mediaPlayer?.stop()
+                mediaPlayer?.release()
+            } catch (_: Throwable) {
+            }
+            mediaPlayer = null
+            playingPath = null
+        }
+
+        if (file.delete()) {
+            message = "Recording deleted."
+            refreshRecordings()
+        } else {
+            message = "Could not delete recording."
+        }
+    }
+
+    private fun renameRecording(file: File, newName: String) {
+        val clean = newName
+            .trim()
+            .replace(Regex("[^A-Za-z0-9 _-]"), "")
+            .take(60)
+
+        if (clean.isBlank()) {
+            message = "Enter a valid recording name."
+            return
+        }
+
+        val target = File(file.parentFile, "$clean.wav")
+
+        if (target.exists()) {
+            message = "A recording with that name already exists."
+            return
+        }
+
+        if (file.renameTo(target)) {
+            if (playingPath == file.absolutePath) {
+                playingPath = target.absolutePath
+            }
+            message = "Recording renamed."
+            refreshRecordings()
+        } else {
+            message = "Could not rename recording."
+        }
+    }
+
+    private fun formatDuration(totalSeconds: Long): String {
+        val minutes = totalSeconds / 60
+        val seconds = totalSeconds % 60
+        return String.format("%02d:%02d", minutes, seconds)
     }
 
     @Composable
@@ -615,7 +784,16 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(Unit) {
             while (true) {
                 route = currentAudioRoute()
-                delay(1500)
+                recording = SoundAmplifierService.isRecording
+
+                recordingSeconds = if (recording && SoundAmplifierService.recordingStartedAt > 0L) {
+                    ((System.currentTimeMillis() - SoundAmplifierService.recordingStartedAt) / 1000L)
+                        .coerceAtLeast(0L)
+                } else {
+                    0L
+                }
+
+                delay(1000)
             }
         }
 
@@ -812,6 +990,16 @@ class MainActivity : ComponentActivity() {
                     )
 
                     ToggleRow(
+                        title = "Speech Focus",
+                        subtitle = "Best-effort voice-band filtering to reduce rumble and hiss; it cannot isolate a specific person.",
+                        checked = speechFocus,
+                        onCheckedChange = {
+                            speechFocus = it
+                            pushSettings()
+                        }
+                    )
+
+                    ToggleRow(
                         title = "Compressor + Limiter",
                         subtitle = "Lift quiet speech while softening sudden loud peaks.",
                         checked = compressor,
@@ -840,6 +1028,61 @@ class MainActivity : ComponentActivity() {
                             pushSettings()
                         }
                     )
+                }
+
+                SectionCard(title = "Local Recording") {
+                    Text(
+                        text = if (recording) {
+                            "RECORDING • ${formatDuration(recordingSeconds)}"
+                        } else {
+                            "Record the processed speech-focused audio as a local WAV file."
+                        },
+                        color = if (recording) Color(0xFFFF6B6B) else Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Text(
+                        text = "Recording always shows a visible app/Android indicator and notification. Use it only where you have permission to record.",
+                        color = Color(0xFFAAAAAA),
+                        fontSize = 12.sp
+                    )
+
+                    Button(
+                        onClick = {
+                            if (recording) stopRecording() else startRecording()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (recording) Color(0xFFFF6B6B) else Color(0xFF9BE564),
+                            contentColor = Color.Black
+                        ),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Text(
+                            if (recording) "STOP & SAVE RECORDING"
+                            else "START RECORDING"
+                        )
+                    }
+
+                    if (recordings.isNotEmpty()) {
+                        Text(
+                            text = "Saved recordings",
+                            color = Color.White,
+                            fontWeight = FontWeight.SemiBold
+                        )
+
+                        recordings.take(8).forEach { file ->
+                            RecordingRow(file)
+                        }
+
+                        if (recordings.size > 8) {
+                            Text(
+                                text = "Showing latest 8 of ${recordings.size} recordings.",
+                                color = Color(0xFF8E8E8E),
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
                 }
 
                 SectionCard(title = "Presets") {
@@ -940,6 +1183,86 @@ class MainActivity : ComponentActivity() {
                 )
 
                 Spacer(Modifier.height(14.dp))
+            }
+        }
+    }
+
+    @Composable
+    private fun RecordingRow(file: File) {
+        var renameText by remember(file.absolutePath) {
+            mutableStateOf(file.nameWithoutExtension)
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF181818)),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = file.name,
+                    color = Color.White,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp
+                )
+
+                Text(
+                    text = String.format("%.1f MB", file.length() / (1024f * 1024f)),
+                    color = Color(0xFF8E8E8E),
+                    fontSize = 11.sp
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = { playRecording(file) },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF252525),
+                            contentColor = Color.White
+                        )
+                    ) {
+                        Text(
+                            if (playingPath == file.absolutePath) "Stop"
+                            else "Play"
+                        )
+                    }
+
+                    Button(
+                        onClick = { deleteRecording(file) },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF252525),
+                            contentColor = Color(0xFFFF8B8B)
+                        )
+                    ) {
+                        Text("Delete")
+                    }
+                }
+
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Rename") },
+                    singleLine = true
+                )
+
+                Button(
+                    onClick = { renameRecording(file, renameText) },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF202020),
+                        contentColor = Color(0xFF9BE564)
+                    )
+                ) {
+                    Text("Save name")
+                }
             }
         }
     }
