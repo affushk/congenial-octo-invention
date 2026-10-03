@@ -129,7 +129,7 @@ class WavRecorder(
         header.put("WAVE".toByteArray(Charsets.US_ASCII))
         header.put("fmt ".toByteArray(Charsets.US_ASCII))
         header.putInt(16)
-        header.putShort(1)
+        header.putShort(1.toShort())
         header.putShort(channels.toShort())
         header.putInt(sampleRate)
         header.putInt(byteRate)
