@@ -41,6 +41,7 @@ class AudioEngine(private val context: Context) {
     @Volatile var noiseReductionEnabled: Boolean = true
     @Volatile var voiceFocusEnabled: Boolean = true
     @Volatile var smartVoiceEnabled: Boolean = true
+    @Volatile var speechFocusEnabled: Boolean = true
     @Volatile var compressorEnabled: Boolean = true
     @Volatile var feedbackGuardEnabled: Boolean = true
     @Volatile var adaptiveNoiseEnabled: Boolean = true
@@ -49,12 +50,14 @@ class AudioEngine(private val context: Context) {
 
     private var previousInput = 0f
     private var previousHighPass = 0f
+    private var previousLowPass = 0f
     private var noiseFloorRms = 600f
     private var feedbackReduction = 1f
     private var hotBufferCount = 0
 
     var levelListener: ((Float) -> Unit)? = null
     var errorListener: ((String) -> Unit)? = null
+    var processedAudioSink: ((ShortArray, Int) -> Unit)? = null
 
     fun isRunning(): Boolean = running.get()
 
@@ -73,6 +76,7 @@ class AudioEngine(private val context: Context) {
 
         previousInput = 0f
         previousHighPass = 0f
+        previousLowPass = 0f
         feedbackReduction = 1f
         hotBufferCount = 0
 
@@ -202,11 +206,13 @@ class AudioEngine(private val context: Context) {
 
     fun updateAdvancedProcessing(
         smartVoice: Boolean,
+        speechFocus: Boolean,
         compressor: Boolean,
         feedbackGuard: Boolean,
         adaptiveNoise: Boolean
     ) {
         smartVoiceEnabled = smartVoice
+        speechFocusEnabled = speechFocus
         compressorEnabled = compressor
         feedbackGuardEnabled = feedbackGuard
         adaptiveNoiseEnabled = adaptiveNoise
@@ -221,6 +227,7 @@ class AudioEngine(private val context: Context) {
 
     private fun audioLoop() {
         val input = ShortArray(480)
+        val processedMono = ShortArray(input.size)
         val stereo = ShortArray(input.size * 2)
         var meterCounter = 0
 
@@ -274,16 +281,17 @@ class AudioEngine(private val context: Context) {
             for (i in 0 until read) {
                 val raw = input[i].toFloat()
 
-                var processed = if (smartVoiceEnabled) {
-                    val highPass = raw - previousInput + (0.94f * previousHighPass)
-                    previousInput = raw
-                    previousHighPass = highPass
+                val highPass = raw - previousInput + (0.94f * previousHighPass)
+                previousInput = raw
+                previousHighPass = highPass
 
-                    // Speech-presence emphasis: reduce low rumble while adding clarity.
-                    (raw * 0.78f) + (highPass * 0.55f)
-                } else {
-                    previousInput = raw
-                    raw
+                // Best-effort speech band focus: suppress low rumble and very high hiss.
+                previousLowPass += 0.42f * (highPass - previousLowPass)
+
+                var processed = when {
+                    speechFocusEnabled -> (previousLowPass * 1.18f) + (highPass * 0.18f)
+                    smartVoiceEnabled -> (raw * 0.78f) + (highPass * 0.55f)
+                    else -> raw
                 }
 
                 processed *= totalGain
@@ -294,9 +302,13 @@ class AudioEngine(private val context: Context) {
 
                 processed = softClip(processed)
 
-                val left = (processed * leftGain).toInt()
+                val mono = processed.toInt()
                     .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-                val right = (processed * rightGain).toInt()
+                processedMono[i] = mono.toShort()
+
+                val left = (mono * leftGain).toInt()
+                    .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                val right = (mono * rightGain).toInt()
                     .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
 
                 outputPeak = max(outputPeak, max(abs(left), abs(right)))
@@ -321,6 +333,11 @@ class AudioEngine(private val context: Context) {
             } else {
                 feedbackReduction = 1f
                 hotBufferCount = 0
+            }
+
+            try {
+                processedAudioSink?.invoke(processedMono, read)
+            } catch (_: Throwable) {
             }
 
             try {
